@@ -1,9 +1,13 @@
-package common
+package graft
 
-import "net/rpc"
-import "fmt"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"fmt"
+	"math/big"
+	"net/rpc"
+	"os"
+	"strconv"
+)
 
 func Nrand() int64 {
 	max := big.NewInt(int64(1) << 62)
@@ -12,7 +16,17 @@ func Nrand() int64 {
 	return x
 }
 
-//
+func port(tag string, host int) string {
+	s := "/var/tmp/824-"
+	s += strconv.Itoa(os.Getuid()) + "/"
+	os.Mkdir(s, 0777)
+	s += "rf-"
+	s += strconv.Itoa(os.Getpid()) + "-"
+	s += tag + "-"
+	s += strconv.Itoa(host)
+	return s
+}
+
 // call() sends an RPC to the rpcname handler on server srv
 // with arguments args, waits for the reply, and leaves the
 // reply in reply. the reply argument should be a pointer
@@ -25,7 +39,6 @@ func Nrand() int64 {
 // you should assume that call() will return an
 // error after a while if the server is dead.
 // don't provide your own time-out mechanism.
-//
 func Call(srv string, rpcname string,
 	args interface{}, reply interface{}) bool {
 	c, errx := rpc.Dial("unix", srv)

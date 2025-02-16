@@ -1,4 +1,4 @@
-package raft
+package graft
 
 //
 // raft library, to be included in an application.
@@ -20,21 +20,20 @@ package raft
 // rf.Min() int -- instances before this seq have been forgotten
 //
 
-import "net"
-import "net/rpc"
-import "log"
-
-import "os"
-import "syscall"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "math/rand"
-
+import (
+	"fmt"
+	"log"
+	"math/rand"
+	"net"
+	"net/rpc"
+	"os"
+	"sync"
+	"sync/atomic"
+	"syscall"
+)
 
 // rf.Status() return values, indicating
 // whether an agreement has been decided,
-// or Paxos has not yet reached agreement,
 // or it was agreed but forgotten (i.e. < Min()).
 type Fate int
 
@@ -55,10 +54,8 @@ type Raft struct {
 	impl       RaftImpl
 }
 
-//
 // tell the peer to shut itself down.
 // for testing.
-//
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	if rf.l != nil {
@@ -66,9 +63,7 @@ func (rf *Raft) Kill() {
 	}
 }
 
-//
 // has this peer been asked to shut down?
-//
 func (rf *Raft) isdead() bool {
 	return atomic.LoadInt32(&rf.dead) != 0
 }
@@ -85,12 +80,14 @@ func (rf *Raft) isunreliable() bool {
 	return atomic.LoadInt32(&rf.unreliable) != 0
 }
 
-//
-// the application wants to create a paxos peer.
-// the ports of all the paxos peers (including this one)
+func (rf *Raft) initImpl() {
+	// TODO: write initialization here
+}
+
+// the application wants to create a raft peer.
+// the ports of all the raft peers (including this one)
 // are in peers[]. this server's port is peers[me].
-//
-func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
+func Make(peers []string, me int, rpcs *rpc.Server) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
 	rf.me = me
@@ -139,7 +136,7 @@ func Make(peers []string, me int, rpcs *rpc.Server) *Paxos {
 					conn.Close()
 				}
 				if err != nil && rf.isdead() == false {
-					fmt.Printf("Paxos(%v) accept: %v\n", me, err.Error())
+					fmt.Printf("Raft(%v) accept: %v\n", me, err.Error())
 				}
 			}
 		}()

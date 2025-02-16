@@ -1,5 +1,4 @@
-package raft
+package graft
 
 type RaftImpl struct {
-	
 }
