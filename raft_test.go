@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestBasic(t *testing.T) {
@@ -19,8 +20,10 @@ func TestBasic(t *testing.T) {
 		rfPorts[i] = port("basic", i)
 	}
 	for i := 0; i < nraft; i++ {
-		rfServers[i] = Make(rfPorts, i, nil)
+		rfServers[i] = Make(rfPorts, int32(i), nil)
 	}
+
+	time.Sleep(2 * time.Second)
 
 	fmt.Printf("Test: Single proposer ...\n")
 }

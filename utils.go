@@ -55,3 +55,16 @@ func Call(srv string, rpcname string,
 	fmt.Println(err)
 	return false
 }
+
+func AsyncCall(srv string, rpcname string, args interface{}, reply interface{}) (*rpc.Call, bool) {
+	c, errx := rpc.Dial("unix", srv)
+	if errx != nil {
+		fmt.Println("Error during Dial:", errx)
+		return nil, false
+	}
+	defer c.Close()
+
+	call := c.Go(rpcname, args, reply, nil)
+
+	return call, true
+}

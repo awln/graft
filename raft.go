@@ -30,6 +30,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // rf.Status() return values, indicating
@@ -50,8 +51,11 @@ type Raft struct {
 	unreliable int32 // for testing
 	rpcCount   int32 // for testing
 	peers      []string
-	me         int // index into peers[]
+	me         int32 // index into peers[]
 	impl       RaftImpl
+}
+
+type Error struct {
 }
 
 // tell the peer to shut itself down.
@@ -82,12 +86,23 @@ func (rf *Raft) isunreliable() bool {
 
 func (rf *Raft) initImpl() {
 	// TODO: write initialization here
+	rf.impl.currentTerm = 0
+	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0})
+	rf.impl.votedFor = -1
+	rf.resetTimer()
+}
+
+func (rf *Raft) resetTimer() {
+	minTimeout := 150 * time.Millisecond
+	maxTimeout := 300 * time.Millisecond
+	randomDuration := minTimeout + time.Duration(rand.Int63n(int64(maxTimeout-minTimeout+1)))
+	rf.impl.heartbeatTimer = *time.AfterFunc(randomDuration, rf.StartElection)
 }
 
 // the application wants to create a raft peer.
 // the ports of all the raft peers (including this one)
 // are in peers[]. this server's port is peers[me].
-func Make(peers []string, me int, rpcs *rpc.Server) *Raft {
+func Make(peers []string, me int32, rpcs *rpc.Server) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
 	rf.me = me
