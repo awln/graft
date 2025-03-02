@@ -22,6 +22,7 @@ func TestBasic(t *testing.T) {
 	for i := 0; i < nraft; i++ {
 		rfServers[i] = Make(rfPorts, int32(i), nil)
 	}
+	rfServers[0].convertToLeader()
 
 	time.Sleep(2 * time.Second)
 

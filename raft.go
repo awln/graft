@@ -87,16 +87,13 @@ func (rf *Raft) isunreliable() bool {
 func (rf *Raft) initImpl() {
 	// TODO: write initialization here
 	rf.impl.currentTerm = 0
+	rf.impl.electionTimeout = time.Millisecond * 150
+	rf.impl.state = FOLLOWER
+	rf.impl.electionCond = sync.NewCond(&rf.mu)
 	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0})
-	rf.impl.votedFor = -1
-	rf.resetTimer()
-}
 
-func (rf *Raft) resetTimer() {
-	minTimeout := 150 * time.Millisecond
-	maxTimeout := 300 * time.Millisecond
-	randomDuration := minTimeout + time.Duration(rand.Int63n(int64(maxTimeout-minTimeout+1)))
-	rf.impl.heartbeatTimer = *time.AfterFunc(randomDuration, rf.StartElection)
+	go rf.electionTimer()
+	go rf.electionLoop()
 }
 
 // the application wants to create a raft peer.
