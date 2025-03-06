@@ -4,7 +4,7 @@ Raft implementation in Golang. The boilerplate code, including test suites, RPC 
 Implementation and features are described in
 Raft dissertation: https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf. Paper contains recommended threading model and alternatives for RPC implementations.
 
-Leader Election is separated into a Prepare-Accept approach to prevent partitioned node from forcing up-to-date leaders to step down, violating the Leader Completeness property (section 9.6). Additonal Raft thread: https://groups.google.com/g/raft-dev/c/JEtBYaPpHXo
+Leader Election is separated into a Prepare-Accept approach to prevent partitioned node from forcing up-to-date leaders to retrigger an election (section 9.6). Additonal Raft thread: https://groups.google.com/g/raft-dev/c/JEtBYaPpHXo
 
 # Raft Abstract
 Raft is a consensus algorithm for managing a replicated
