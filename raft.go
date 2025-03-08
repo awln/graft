@@ -45,14 +45,15 @@ const (
 )
 
 type Raft struct {
-	mu         sync.Mutex
-	l          net.Listener
-	dead       int32 // for testing
-	unreliable int32 // for testing
-	rpcCount   int32 // for testing
-	peers      []string
-	me         int32 // index into peers[]
-	impl       RaftImpl
+	mu           sync.Mutex
+	l            net.Listener
+	dead         int32 // for testing
+	unreliable   int32 // for testing
+	rpcCount     int32 // for testing
+	peers        []string
+	me           int32 // index into peers[]
+	impl         RaftImpl
+	sessionState map[string]int32 // client id to last seen serial number
 }
 
 type Error struct {
@@ -90,8 +91,7 @@ func (rf *Raft) initImpl() {
 	rf.impl.electionTimeout = time.Millisecond * 150
 	rf.impl.state = FOLLOWER
 	rf.impl.electionCond = sync.NewCond(&rf.mu)
-	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0})
-
+	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, ""})
 	go rf.electionTimer()
 	go rf.electionLoop()
 }

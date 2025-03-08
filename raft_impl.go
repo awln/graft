@@ -14,12 +14,13 @@ type RaftImpl struct {
 	currentTerm int32
 	votedFor    string
 	log         []LogEntry
+	kvStore     map[string]string
 
 	commitIndex int32
 	lastApplied int32
 
-	nextIndex  []int32
-	matchIndex []int32
+	nextIndex  []int32 // volatile state: only for leader to use, reset on leader election
+	matchIndex []int32 // volatile state: only for leader to use, reset on leader election
 
 	electionCond    *sync.Cond
 	electionTimeout time.Duration
@@ -31,6 +32,8 @@ type LogEntry struct {
 	Key       string
 	Value     string
 	Term      int32
+	Index     int32 // used for linearizable semantics, serializable view from client's perspective
+	ClientId  string
 }
 
 type Operation int32
@@ -63,6 +66,7 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	CurrentTerm int32
 	Success     bool
+	LeaderId    string
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) error {
@@ -116,6 +120,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// append remaining entries
 	rf.impl.log = append(rf.impl.log, args.Entries[index:]...)
 
+	// apply committed entries to state machine
+
 	if args.LeaderCommitIndex > rf.impl.commitIndex {
 		rf.impl.commitIndex = min(args.LeaderCommitIndex, int32(len(rf.impl.log)-1))
 	}
@@ -163,11 +169,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) erro
 	// If candidate last log term is less than the current term, or if the candidate last log term is equal but
 	// the log length is less than the current log, the candidate has an out-of-date view when compared
 	// with the current Raft instance.
-	// if args.LastLogTerm < rf.impl.lastLogTerm() {
-	// 	return nil
-	// } else if args.LastLogTerm == rf.impl.lastLogTerm() && args.LastLogIndex < rf.impl.lastLogIndex() {
-	// 	return nil
-	// }
+	if args.LastLogTerm < rf.impl.lastLogTerm() {
+		return nil
+	} else if args.LastLogTerm == rf.impl.lastLogTerm() && args.LastLogIndex < rf.impl.lastLogIndex() {
+		return nil
+	}
 
 	// vote success
 	reply.VoteGranted = true
@@ -179,13 +185,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) erro
 	return nil
 }
 
+// Send empty appends to peers to update
+// if less than majority of clusters responded
+// and election timer passes, step down to a follower.
+// Meant to be ran in a separate go routine.
 func (rf *Raft) heartbeatLoop() {
 	for {
 		time.Sleep(rf.impl.electionTimeout)
 		rf.mu.Lock()
 		if rf.impl.state == FOLLOWER {
 			rf.mu.Unlock()
-			continue
+			return
 		}
 		rf.mu.Unlock()
 		rf.sendAppendEntriesToPeers()
@@ -196,12 +206,12 @@ func (rf *Raft) sendAppendEntriesToPeers() {
 	numReplies := 1
 	for idx, peer := range rf.peers {
 		if idx != int(rf.me) {
-			go rf.sendAppendEntriesToPeer(peer, &numReplies)
+			go rf.sendAppendEntriesToPeer(idx, peer, &numReplies)
 		}
 	}
 }
 
-func (rf *Raft) sendAppendEntriesToPeer(peer string, numResponses *int) {
+func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numResponses *int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	fmt.Println(rf.impl.log)
@@ -215,11 +225,18 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numResponses *int) {
 	reply := AppendEntriesReply{}
 
 	rf.mu.Unlock()
+	// does this need to be an infinite loop?
 	success := Call(peer, "Raft.AppendEntries", &args, &reply)
 	rf.mu.Lock()
 
 	if !success || rf.impl.state != LEADER {
 		return
+	}
+
+	if !reply.Success {
+		if reply.CurrentTerm > rf.impl.currentTerm {
+			rf.impl.convertToFollower(reply.LeaderId, reply.CurrentTerm)
+		}
 	}
 }
 
@@ -279,6 +296,7 @@ func (rf *Raft) sendRequestVote(address string, votes *int, prepare bool) {
 func (rf *RaftImpl) convertToFollower(leaderId string, term int32) {
 	rf.state = FOLLOWER
 	rf.currentTerm = term
+	rf.leaderId = ""
 	fmt.Println("Converting to follower, returning")
 }
 
@@ -293,8 +311,17 @@ func (rf *RaftImpl) lastLogTerm() int32 {
 // Force instance to become leader
 func (rf *Raft) convertToLeader() {
 	rf.impl.state = LEADER
-	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", rf.impl.currentTerm})
+	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", rf.impl.currentTerm, 0, ""})
+	rf.impl.matchIndex = make([]int32, len(rf.peers))
+	for i := range rf.impl.matchIndex {
+		rf.impl.matchIndex[i] = 0
+	}
+	rf.impl.nextIndex = make([]int32, len(rf.peers))
+	for i := range rf.impl.nextIndex {
+		rf.impl.nextIndex[i] = rf.impl.lastLogIndex() + 1
+	}
 	rf.sendAppendEntriesToPeers()
+	go rf.heartbeatLoop()
 }
 
 func (rf *Raft) electionTimer() {
@@ -319,6 +346,7 @@ func (rf *Raft) electionLoop() {
 		}
 		if rf.impl.state == FOLLOWER {
 			rf.impl.state = PRECANDIDATE
+			rf.impl.leaderId = ""
 		} else if rf.impl.state == CANDIDATE {
 			rf.impl.currentTerm++
 			rf.impl.votedFor = rf.peers[rf.me]
