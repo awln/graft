@@ -91,7 +91,7 @@ func (rf *Raft) initImpl() {
 	rf.impl.electionTimeout = time.Millisecond * 150
 	rf.impl.state = FOLLOWER
 	rf.impl.electionCond = sync.NewCond(&rf.mu)
-	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, ""})
+	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, 0})
 	go rf.electionTimer()
 	go rf.electionLoop()
 }
