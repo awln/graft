@@ -255,6 +255,7 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, appendLatch chan b
 		rf.mu.Lock()
 
 		if rf.impl.state != LEADER {
+			appendLatch <- false
 			return
 		}
 
