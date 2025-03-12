@@ -261,14 +261,22 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 			rf.impl.nextIndex[idx] = rf.impl.lastLogIndex()
 			rf.impl.matchIndex[idx] = rf.impl.lastLogIndex()
 			nextCommitIndex := rf.impl.nextIndex[idx]
-			for _, nextIndex := range rf.impl.nextIndex {
-				nextCommitIndex = min(nextCommitIndex, nextIndex)
+			for potentialCommit := rf.impl.lastLogTerm(); potentialCommit > rf.impl.commitIndex; potentialCommit-- {
+				count := 0
+				for _, nextIndex := range rf.impl.nextIndex {
+					if nextIndex >= potentialCommit {
+						count++
+					}
+				}
+				if count > len(rf.peers)/2 {
+					rf.impl.commitIndex = max(rf.impl.commitIndex, nextCommitIndex)
+					rf.impl.commitCond.Broadcast()
+					break
+				}
 			}
-			rf.impl.commitIndex = max(rf.impl.commitIndex, nextCommitIndex)
 			*numSuccess++
 			if *numSuccess > len(rf.peers)/2 {
 				rf.impl.leaderCommitted = true
-				rf.impl.commitCond.Broadcast()
 			}
 		}
 	}
@@ -331,6 +339,9 @@ func (rf *RaftImpl) convertToFollower(leaderIndex int32, term int32) {
 	rf.currentTerm = term
 	rf.leaderIndex = leaderIndex
 	rf.leaderCommitted = false
+	rf.commitCond.Broadcast()
+	rf.electionCond.Broadcast()
+	rf.readCond.Broadcast()
 	fmt.Println("Converting to follower, returning")
 }
 
