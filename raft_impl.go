@@ -14,15 +14,19 @@ type RaftImpl struct {
 	currentTerm int32
 	votedFor    int32
 	log         []LogEntry
-	kvStore     map[string]string
+	store       map[string]string
+	seq         int
 
 	commitIndex int32
 	lastApplied int32
 
-	nextIndex  []int32 // volatile state: only for leader to use, reset on leader election
-	matchIndex []int32 // volatile state: only for leader to use, reset on leader election
+	nextIndex       []int32 // volatile state: only for leader to use, reset on leader election
+	matchIndex      []int32 // volatile state: only for leader to use, reset on leader election
+	leaderCommitted bool
 
 	electionCond    *sync.Cond
+	commitCond      *sync.Cond
+	readCond        *sync.Cond
 	electionTimeout time.Duration
 	lastPingTime    time.Time
 }
@@ -124,9 +128,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	if args.LeaderCommitIndex > rf.impl.commitIndex {
 		rf.impl.commitIndex = min(args.LeaderCommitIndex, int32(len(rf.impl.log)-1))
-		for index := rf.impl.lastApplied; index <= rf.impl.commitIndex; index++ {
-			rf.applyLog(index)
-		}
+		rf.impl.commitCond.Signal()
 	}
 
 	reply.Success = true
@@ -137,9 +139,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 func (rf *Raft) applyLog(index int32) {
 	switch rf.impl.log[index].Operation {
 	case DELETE:
-		delete(rf.impl.kvStore, rf.impl.log[index].Key)
+		delete(rf.impl.store, rf.impl.log[index].Key)
 	case PUT:
-		rf.impl.kvStore[rf.impl.log[index].Key] = rf.impl.log[index].Value
+		rf.impl.store[rf.impl.log[index].Key] = rf.impl.log[index].Value
 	}
 }
 
@@ -230,6 +232,8 @@ func (rf *Raft) sendAppendEntriesToPeers() bool {
 	}
 
 	if numSuccess > len(rf.peers)/2 {
+		rf.impl.leaderCommitted = true
+		rf.impl.commitCond.Broadcast()
 		return true
 	} else {
 		return false
@@ -333,6 +337,7 @@ func (rf *RaftImpl) convertToFollower(leaderIndex int32, term int32) {
 	rf.state = FOLLOWER
 	rf.currentTerm = term
 	rf.leaderIndex = leaderIndex
+	rf.leaderCommitted = false
 	fmt.Println("Converting to follower, returning")
 }
 
@@ -356,6 +361,7 @@ func (rf *Raft) convertToLeader() {
 	for i := range rf.impl.nextIndex {
 		rf.impl.nextIndex[i] = rf.impl.lastLogIndex()
 	}
+	rf.impl.leaderCommitted = false
 	rf.sendAppendEntriesToPeers()
 	go rf.heartbeatLoop()
 }
@@ -388,5 +394,106 @@ func (rf *Raft) electionLoop() {
 			rf.impl.votedFor = rf.me
 		}
 		rf.sendRequestVotes()
+	}
+}
+
+type GetArgs struct {
+	key      string
+	seq      int
+	clientId int
+}
+
+type GetReply struct {
+	success    bool
+	value      string
+	leaderHint int32
+}
+
+func (rf *Raft) Get(args *GetArgs, reply *GetReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.success = false
+	reply.leaderHint = rf.impl.leaderIndex
+
+	if rf.impl.leaderIndex != rf.me {
+		return
+	}
+
+	if args.seq <= rf.impl.seq {
+		reply.success = true
+		reply.value = rf.impl.store[args.key]
+		return
+	}
+
+	for rf.impl.state == LEADER && !rf.impl.leaderCommitted {
+		rf.impl.readCond.Wait()
+	}
+
+	if rf.impl.state != LEADER {
+		reply.success = false
+		reply.leaderHint = rf.impl.leaderIndex
+		return
+	}
+
+	rf.impl.seq++
+	reply.value = rf.impl.store[args.key]
+	reply.success = true
+}
+
+type PutArgs struct {
+	key      string
+	value    string
+	seq      int
+	clientId int
+}
+
+type PutReply struct {
+	success    bool
+	leaderHint int32
+}
+
+func (rf *Raft) Put(args *PutArgs, reply *PutReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.success = false
+	reply.leaderHint = rf.impl.leaderIndex
+
+	if rf.impl.leaderIndex != rf.me {
+		return
+	}
+
+	if args.seq <= rf.impl.seq {
+		reply.success = true
+		return
+	}
+
+	logIndex := rf.impl.lastLogIndex() + 1
+	rf.impl.log = append(rf.impl.log, LogEntry{PUT, args.key, args.value, rf.impl.currentTerm, logIndex, args.clientId})
+	rf.impl.store[args.key] = args.value
+
+	for rf.impl.state == LEADER && rf.impl.commitIndex < logIndex {
+		rf.impl.commitCond.Wait()
+	}
+
+	if rf.impl.state != LEADER {
+		reply.success = false
+		reply.leaderHint = rf.impl.leaderIndex
+		return
+	}
+
+	reply.success = true
+	rf.impl.seq++
+}
+
+func (rf *Raft) commitLoop() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	for {
+		rf.impl.commitCond.Wait()
+		for index := rf.impl.lastApplied; index <= rf.impl.commitIndex; index++ {
+			rf.applyLog(index)
+		}
 	}
 }
