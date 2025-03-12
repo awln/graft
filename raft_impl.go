@@ -259,6 +259,7 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 			rf.impl.nextIndex[idx]--
 		} else {
 			rf.impl.nextIndex[idx] = rf.impl.lastLogIndex()
+			rf.impl.matchIndex[idx] = rf.impl.lastLogIndex()
 			nextCommitIndex := rf.impl.nextIndex[idx]
 			for _, nextIndex := range rf.impl.nextIndex {
 				nextCommitIndex = min(nextCommitIndex, nextIndex)
