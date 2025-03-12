@@ -216,31 +216,16 @@ func (rf *Raft) heartbeatLoop() {
 	}
 }
 
-func (rf *Raft) sendAppendEntriesToPeers() bool {
-	appendLatch := make(chan bool, len(rf.peers))
+func (rf *Raft) sendAppendEntriesToPeers() {
+	numSuccess := 0
 	for idx, peer := range rf.peers {
 		if idx != int(rf.me) {
-			go rf.sendAppendEntriesToPeer(idx, peer, appendLatch)
+			go rf.sendAppendEntriesToPeer(idx, peer, &numSuccess)
 		}
-	}
-	numSuccess := 0
-	for i := 0; i < len(rf.peers); i++ {
-		success := <-appendLatch
-		if success {
-			numSuccess++
-		}
-	}
-
-	if numSuccess > len(rf.peers)/2 {
-		rf.impl.leaderCommitted = true
-		rf.impl.commitCond.Broadcast()
-		return true
-	} else {
-		return false
 	}
 }
 
-func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, appendLatch chan bool) {
+func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	fmt.Println(rf.impl.log)
@@ -259,7 +244,6 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, appendLatch chan b
 		rf.mu.Lock()
 
 		if rf.impl.state != LEADER {
-			appendLatch <- false
 			return
 		}
 
@@ -270,13 +254,21 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, appendLatch chan b
 		if !reply.Success {
 			if reply.CurrentTerm > rf.impl.currentTerm {
 				rf.impl.convertToFollower(reply.LeaderIndex, reply.CurrentTerm)
-				appendLatch <- false
 				return
 			}
 			rf.impl.nextIndex[idx]--
 		} else {
 			rf.impl.nextIndex[idx] = rf.impl.lastLogIndex()
-			appendLatch <- true
+			nextCommitIndex := rf.impl.nextIndex[idx]
+			for _, nextIndex := range rf.impl.nextIndex {
+				nextCommitIndex = min(nextCommitIndex, nextIndex)
+			}
+			rf.impl.commitIndex = max(rf.impl.commitIndex, nextCommitIndex)
+			*numSuccess++
+			if *numSuccess > len(rf.peers)/2 {
+				rf.impl.leaderCommitted = true
+				rf.impl.commitCond.Broadcast()
+			}
 		}
 	}
 }
