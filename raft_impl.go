@@ -24,11 +24,12 @@ type RaftImpl struct {
 	matchIndex      []int32 // volatile state: only for leader to use, reset on leader election
 	leaderCommitted bool
 
-	electionCond    *sync.Cond
-	commitCond      *sync.Cond
-	readCond        *sync.Cond
-	electionTimeout time.Duration
-	lastPingTime    time.Time
+	electionCond     *sync.Cond
+	commitCond       *sync.Cond
+	readCond         *sync.Cond
+	electionTimeout  time.Duration
+	heartbeatTimeout time.Duration
+	lastPingTime     time.Time
 }
 
 type LogEntry struct {
@@ -76,9 +77,9 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer fmt.Println("Replying to AppendEntries: ", reply, rf.impl.log)
+	defer fmt.Println("Replying to AppendEntries, reply:", reply, "log:", rf.impl.log, "peer:", rf.me)
 
-	fmt.Println("AppendEntries received ", rf.me)
+	fmt.Println("AppendEntries received:", args, "raft idx: ", rf.me)
 
 	reply.Success = false
 	reply.CurrentTerm = rf.impl.currentTerm
@@ -124,10 +125,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// append remaining entries
 	rf.impl.log = append(rf.impl.log, args.Entries[index:]...)
 
-	// apply committed entries to state machine
-
 	if args.LeaderCommitIndex > rf.impl.commitIndex {
-		rf.impl.commitIndex = min(args.LeaderCommitIndex, int32(len(rf.impl.log)-1))
+		rf.impl.commitIndex = min(args.LeaderCommitIndex, rf.impl.lastLogIndex())
 		rf.impl.commitCond.Signal()
 	}
 
@@ -213,6 +212,7 @@ func (rf *Raft) heartbeatLoop() {
 		}
 		rf.mu.Unlock()
 		rf.sendAppendEntriesToPeers()
+		rf.impl.lastPingTime = time.Now()
 	}
 }
 
@@ -228,7 +228,7 @@ func (rf *Raft) sendAppendEntriesToPeers() {
 func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	fmt.Println(rf.impl.log)
+	fmt.Println("Leader log state:", rf.impl.log)
 	for {
 		args := AppendEntriesArgs{
 			rf.impl.currentTerm,
@@ -258,10 +258,11 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 			}
 			rf.impl.nextIndex[idx]--
 		} else {
+			fmt.Println("Current nextIndexes:", rf.impl.nextIndex, "Leader Last log index:", rf.impl.lastLogIndex(),
+				"Current Commit:", rf.impl.commitIndex)
 			rf.impl.nextIndex[idx] = rf.impl.lastLogIndex()
 			rf.impl.matchIndex[idx] = rf.impl.lastLogIndex()
-			nextCommitIndex := rf.impl.nextIndex[idx]
-			for potentialCommit := rf.impl.lastLogTerm(); potentialCommit > rf.impl.commitIndex; potentialCommit-- {
+			for potentialCommit := rf.impl.lastLogIndex(); potentialCommit > rf.impl.commitIndex; potentialCommit-- {
 				count := 0
 				for _, nextIndex := range rf.impl.nextIndex {
 					if nextIndex >= potentialCommit {
@@ -269,15 +270,20 @@ func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 					}
 				}
 				if count > len(rf.peers)/2 {
-					rf.impl.commitIndex = max(rf.impl.commitIndex, nextCommitIndex)
+					fmt.Println("Current commit index:", rf.impl.commitIndex, "new commit index is:", potentialCommit)
+					rf.impl.commitIndex = max(rf.impl.commitIndex, potentialCommit)
 					rf.impl.commitCond.Broadcast()
 					break
 				}
 			}
 			*numSuccess++
+			fmt.Println("Num Successes:", *numSuccess)
 			if *numSuccess > len(rf.peers)/2 {
 				rf.impl.leaderCommitted = true
+				fmt.Println("Broadcasting commit condition, commit index:", rf.impl.commitIndex)
+				rf.impl.commitCond.Broadcast()
 			}
+			return
 		}
 	}
 }
@@ -356,7 +362,7 @@ func (rf *RaftImpl) lastLogTerm() int32 {
 // Force instance to become leader
 func (rf *Raft) convertToLeader() {
 	rf.impl.state = LEADER
-	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", rf.impl.currentTerm, 0, 0})
+	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, 0})
 	rf.impl.matchIndex = make([]int32, len(rf.peers))
 	for i := range rf.impl.matchIndex {
 		rf.impl.matchIndex[i] = 0
@@ -402,93 +408,96 @@ func (rf *Raft) electionLoop() {
 }
 
 type GetArgs struct {
-	key      string
-	seq      int
-	clientId int
+	Key      string
+	Seq      int
+	ClientId int
 }
 
 type GetReply struct {
-	success    bool
-	value      string
-	leaderHint int32
+	Success    bool
+	Value      string
+	LeaderHint int32
 }
 
-func (rf *Raft) Get(args *GetArgs, reply *GetReply) {
+func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.success = false
-	reply.leaderHint = rf.impl.leaderIndex
+	reply.Success = false
+	reply.LeaderHint = rf.impl.leaderIndex
 
 	if rf.impl.leaderIndex != rf.me {
-		return
+		return nil
 	}
 
-	if args.seq <= rf.impl.seq {
-		reply.success = true
-		reply.value = rf.impl.store[args.key]
-		return
+	if args.Seq <= rf.impl.seq {
+		reply.Success = true
+		reply.Value = rf.impl.store[args.Key]
+		return nil
 	}
 
 	for rf.impl.state == LEADER && !rf.impl.leaderCommitted {
-		rf.impl.readCond.Wait()
+		rf.impl.commitCond.Wait()
 	}
 
 	if rf.impl.state != LEADER {
-		reply.success = false
-		reply.leaderHint = rf.impl.leaderIndex
-		return
+		reply.Success = false
+		reply.LeaderHint = rf.impl.leaderIndex
+		return nil
 	}
 
 	rf.impl.seq++
-	reply.value = rf.impl.store[args.key]
-	reply.success = true
+	reply.Value = rf.impl.store[args.Key]
+	reply.Success = true
+	return nil
 }
 
 type PutArgs struct {
-	key      string
-	value    string
-	seq      int
-	clientId int
+	Key      string
+	Value    string
+	Seq      int
+	ClientId int
 }
 
 type PutReply struct {
-	success    bool
-	leaderHint int32
+	Success    bool
+	LeaderHint int32
 }
 
-func (rf *Raft) Put(args *PutArgs, reply *PutReply) {
+func (rf *Raft) Put(args *PutArgs, reply *PutReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.success = false
-	reply.leaderHint = rf.impl.leaderIndex
+	reply.Success = false
+	reply.LeaderHint = rf.impl.leaderIndex
 
 	if rf.impl.leaderIndex != rf.me {
-		return
+		return nil
 	}
 
-	if args.seq <= rf.impl.seq {
-		reply.success = true
-		return
+	if args.Seq <= rf.impl.seq {
+		reply.Success = true
+		return nil
 	}
 
-	logIndex := rf.impl.lastLogIndex() + 1
-	rf.impl.log = append(rf.impl.log, LogEntry{PUT, args.key, args.value, rf.impl.currentTerm, logIndex, args.clientId})
-	rf.impl.store[args.key] = args.value
+	rf.impl.log = append(rf.impl.log, LogEntry{PUT, args.Key, args.Value, rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, args.ClientId})
+	logIndex := rf.impl.lastLogIndex()
+	fmt.Println("Log after calling PUT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
+	rf.impl.store[args.Key] = args.Value
 
 	for rf.impl.state == LEADER && rf.impl.commitIndex < logIndex {
 		rf.impl.commitCond.Wait()
 	}
 
 	if rf.impl.state != LEADER {
-		reply.success = false
-		reply.leaderHint = rf.impl.leaderIndex
-		return
+		reply.Success = false
+		reply.LeaderHint = rf.impl.leaderIndex
+		return nil
 	}
 
-	reply.success = true
+	reply.Success = true
 	rf.impl.seq++
+	return nil
 }
 
 func (rf *Raft) commitLoop() {

@@ -89,11 +89,14 @@ func (rf *Raft) initImpl() {
 	// TODO: write initialization here
 	rf.impl.currentTerm = 0
 	rf.impl.electionTimeout = time.Millisecond * 150
+	rf.impl.heartbeatTimeout = time.Millisecond * 30
 	rf.impl.state = FOLLOWER
 	rf.impl.electionCond = sync.NewCond(&rf.mu)
 	rf.impl.commitCond = sync.NewCond(&rf.mu)
 	rf.impl.readCond = sync.NewCond(&rf.mu)
 	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, 0})
+	rf.impl.seq = -1
+	rf.impl.store = make(map[string]string)
 	go rf.electionTimer()
 	go rf.electionLoop()
 	go rf.commitLoop()
