@@ -433,6 +433,8 @@ func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 	reply.Success = false
 	reply.LeaderHint = rf.impl.leaderIndex
 
+	readIndex := rf.impl.commitIndex
+
 	if rf.impl.leaderIndex != rf.me {
 		return nil
 	}
@@ -443,7 +445,7 @@ func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 		return nil
 	}
 
-	for !rf.isdead() && rf.impl.state == LEADER && !rf.impl.leaderCommitted {
+	for !rf.isdead() && rf.impl.state == LEADER && !rf.impl.leaderCommitted && readIndex > rf.impl.lastApplied {
 		rf.impl.commitCond.Wait()
 	}
 
@@ -491,7 +493,6 @@ func (rf *Raft) Put(args *PutArgs, reply *PutReply) error {
 	rf.impl.nextIndex[rf.me] = rf.impl.lastLogIndex()
 	logIndex := rf.impl.lastLogIndex()
 	log.Println("Log after calling PUT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
-	rf.impl.store[args.Key] = args.Value
 
 	for !rf.isdead() && rf.impl.state == LEADER && rf.impl.commitIndex < logIndex {
 		rf.impl.commitCond.Wait()
