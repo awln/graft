@@ -218,7 +218,6 @@ func (rf *Raft) heartbeatLoop() {
 		}
 		rf.mu.Unlock()
 		rf.sendAppendEntriesToPeers()
-		rf.impl.lastPingTime = time.Now()
 	}
 }
 
@@ -235,7 +234,7 @@ func (rf *Raft) sendAppendEntriesToPeers() {
 func (rf *Raft) sendAppendEntriesToPeer(idx int, peer string, numSuccess *int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	for {
+	for !rf.isdead() {
 		args := AppendEntriesArgs{
 			rf.impl.currentTerm,
 			rf.me,
@@ -384,7 +383,7 @@ func (rf *Raft) convertToLeader() {
 }
 
 func (rf *Raft) electionTimer() {
-	for {
+	for !rf.isdead() {
 		minTimeout := rf.impl.electionTimeout
 		maxTimeout := 2 * rf.impl.electionTimeout
 		electionTimeoutDuration := rf.impl.electionTimeout + time.Duration(rand.Int63n(int64(maxTimeout-minTimeout)))
@@ -399,7 +398,7 @@ func (rf *Raft) electionLoop() {
 	defer rf.mu.Unlock()
 	for !rf.isdead() {
 		rf.impl.electionCond.Wait()
-		if rf.impl.state == LEADER || time.Since(rf.impl.lastPingTime) < rf.impl.electionTimeout {
+		if (rf.impl.state == LEADER && time.Since(rf.impl.lastPingTime) < rf.impl.electionTimeout) || time.Since(rf.impl.lastPingTime) < rf.impl.electionTimeout {
 			log.Println(fmt.Sprintf("Time since last ping: %s, election timeout: %s, peer: %d", time.Since(rf.impl.lastPingTime), rf.impl.electionTimeout, rf.me))
 			continue
 		}
@@ -444,7 +443,7 @@ func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 		return nil
 	}
 
-	for rf.impl.state == LEADER && !rf.impl.leaderCommitted {
+	for !rf.isdead() && rf.impl.state == LEADER && !rf.impl.leaderCommitted {
 		rf.impl.commitCond.Wait()
 	}
 
@@ -489,11 +488,12 @@ func (rf *Raft) Put(args *PutArgs, reply *PutReply) error {
 	}
 
 	rf.impl.log = append(rf.impl.log, LogEntry{PUT, args.Key, args.Value, rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, args.ClientId})
+	rf.impl.nextIndex[rf.me] = rf.impl.lastLogIndex()
 	logIndex := rf.impl.lastLogIndex()
 	log.Println("Log after calling PUT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
 	rf.impl.store[args.Key] = args.Value
 
-	for rf.impl.state == LEADER && rf.impl.commitIndex < logIndex {
+	for !rf.isdead() && rf.impl.state == LEADER && rf.impl.commitIndex < logIndex {
 		rf.impl.commitCond.Wait()
 	}
 
