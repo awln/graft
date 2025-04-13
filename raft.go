@@ -94,9 +94,10 @@ func (rf *Raft) initImpl() {
 	rf.impl.electionCond = sync.NewCond(&rf.mu)
 	rf.impl.commitCond = sync.NewCond(&rf.mu)
 	rf.impl.readCond = sync.NewCond(&rf.mu)
-	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, 0})
-	rf.impl.seq = -1
-	rf.impl.store = make(map[string]string)
+	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, 0, 0})
+	rf.impl.clientSessions = make(map[int]*ClientSession)
+	rf.impl.nextIndex = make([]int32, len(rf.peers))
+	rf.impl.clientIndex = 0
 	go rf.electionTimer()
 	go rf.electionLoop()
 	go rf.commitLoop()
