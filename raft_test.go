@@ -10,28 +10,6 @@ import (
 	"time"
 )
 
-func TestBasic(t *testing.T) {
-	runtime.GOMAXPROCS(4)
-
-	const nraft = 3
-	var rfServers []*Raft = make([]*Raft, nraft)
-	var rfPorts []string = make([]string, nraft)
-
-	defer cleanup(rfServers)
-
-	for i := 0; i < nraft; i++ {
-		rfPorts[i] = port("basic", i)
-	}
-	for i := 0; i < nraft; i++ {
-		rfServers[i] = Make(rfPorts, int32(i), nil)
-	}
-	rfServers[0].convertToLeader()
-
-	time.Sleep(2 * time.Second)
-
-	fmt.Printf("Test: Single proposer ...\n")
-}
-
 func TestAppendEntries(t *testing.T) {
 	runtime.GOMAXPROCS(4)
 
@@ -45,38 +23,25 @@ func TestAppendEntries(t *testing.T) {
 		rfPorts[i] = port("AppendEntries", i)
 	}
 	for i := 0; i < nraft; i++ {
-		rfServers[i] = Make(rfPorts, int32(i), nil)
+		rfServers[i] = Make(rfPorts, rfPorts[i], nil)
 	}
 	rfServers[0].convertToLeader()
-	NewClient(rfServers, rfPorts, nraft)
+	client := NewClient(rfServers, rfPorts, nraft)
 
-	srv := rfPorts[0]
-	putReply := PutReply{}
-	for !Call(srv, "Raft.Put", &PutArgs{"key1", "value1", 1, 0}, &putReply) || !putReply.Success {
-		if !putReply.Success {
-			srv = rfPorts[putReply.LeaderHint]
-		}
+	for i := 0; i < nraft; i++ {
+		client.RegisterServer(rfPorts[i])
 	}
+
+	client.Put("key1", "value1")
 
 	time.Sleep(2 * time.Second)
 
 	fmt.Println("Calling Get on Raft cluster for 'key1'")
 
-	getReply := GetReply{}
-	for {
-		callSuccess := Call(srv, "Raft.Get", &GetArgs{"key1", 2, 0}, &getReply)
-		if callSuccess {
-			if !getReply.Success {
-				srv = rfPorts[getReply.LeaderHint]
-			} else {
-				if getReply.Value != "value1" {
-					t.Errorf("Servers should store 'value1' for the key: 'key1'")
-				} else {
-					fmt.Println("Leader currently stores value1 for key1")
-					break
-				}
-			}
-		}
+	if val := client.Get("key1"); val != "value1" {
+		t.Errorf("Servers should store 'value1' for the key: 'key1', observed value: %s", val)
+	} else {
+		fmt.Println("Leader currently stores value1 for key1")
 	}
 
 	cleanup(rfServers)
@@ -97,11 +62,15 @@ func TestAppendEntriesUnreliable(t *testing.T) {
 		rfPorts[i] = port("AppendEntries", i)
 	}
 	for i := 0; i < nraft; i++ {
-		rfServers[i] = Make(rfPorts, int32(i), nil)
+		rfServers[i] = Make(rfPorts, rfPorts[i], nil)
 		rfServers[i].setunreliable(true)
 	}
 	rfServers[0].convertToLeader()
 	client := NewClient(rfServers, rfPorts, nraft)
+
+	for i := 0; i < nraft; i++ {
+		client.RegisterServer(rfPorts[i])
+	}
 
 	client.Put("key1", "value1")
 
@@ -133,11 +102,15 @@ func TestAppendEntriesLongUnreliable(t *testing.T) {
 		rfPorts[i] = port("AppendEntries", i)
 	}
 	for i := 0; i < nraft; i++ {
-		rfServers[i] = Make(rfPorts, int32(i), nil)
+		rfServers[i] = Make(rfPorts, rfPorts[i], nil)
 		rfServers[i].setunreliable(true)
 	}
 	rfServers[0].convertToLeader()
 	client := NewClient(rfServers, rfPorts, nraft)
+
+	for i := 0; i < nraft; i++ {
+		client.RegisterServer(rfPorts[i])
+	}
 
 	time.Sleep(2 * time.Second)
 
@@ -193,12 +166,16 @@ func TestAppendEntriesTimeoutUnreliable(t *testing.T) {
 		rfPorts[i] = port("AppendEntries", i)
 	}
 	for i := 0; i < nraft; i++ {
-		rfServers[i] = Make(rfPorts, int32(i), nil)
+		rfServers[i] = Make(rfPorts, rfPorts[i], nil)
 		rfServers[i].impl.electionTimeout = time.Millisecond * 60
 		rfServers[i].setunreliable(true)
 	}
 	rfServers[0].convertToLeader()
 	client := NewClient(rfServers, rfPorts, nraft)
+
+	for i := 0; i < nraft; i++ {
+		client.RegisterServer(rfPorts[i])
+	}
 
 	time.Sleep(2 * time.Second)
 
@@ -253,11 +230,15 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 		rfPorts[i] = port("un", i)
 	}
 	for i := 0; i < nservers; i++ {
-		rfServers[i] = Make(rfPorts, int32(i), nil)
+		rfServers[i] = Make(rfPorts, rfPorts[i], nil)
 		rfServers[i].setunreliable(true)
 	}
 	rfServers[0].convertToLeader()
 	client := NewClient(rfServers, rfPorts, nservers)
+
+	for i := 0; i < nservers; i++ {
+		client.RegisterServer(rfPorts[i])
+	}
 
 	fmt.Printf("Test: Basic put/get, unreliable ...\n")
 

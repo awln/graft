@@ -51,7 +51,7 @@ type Raft struct {
 	unreliable   int32 // for testing
 	rpcCount     int32 // for testing
 	peers        []string
-	me           int32 // index into peers[]
+	me           string // this Raft instance's address
 	impl         RaftImpl
 	sessionState map[string]int32 // client id to last seen serial number
 }
@@ -85,7 +85,7 @@ func (rf *Raft) isunreliable() bool {
 	return atomic.LoadInt32(&rf.unreliable) != 0
 }
 
-func (rf *Raft) initImpl() {
+func (rf *Raft) initImpl(me string) {
 	// TODO: write initialization here
 	rf.impl.currentTerm = 0
 	rf.impl.electionTimeout = time.Millisecond * 150
@@ -96,22 +96,24 @@ func (rf *Raft) initImpl() {
 	rf.impl.readCond = sync.NewCond(&rf.mu)
 	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "", "", 0, 0, 0, 0})
 	rf.impl.clientSessions = make(map[int]*ClientSession)
-	rf.impl.nextIndex = make([]int32, len(rf.peers))
+	rf.impl.nextIndex = make(map[string]int32, len(rf.impl.peers))
+	rf.impl.matchIndex = make(map[string]int32, len(rf.impl.peers))
+	rf.impl.peers = make(map[string]struct{})
+	rf.impl.peers[me] = struct{}{}
 	rf.impl.clientIndex = 0
-	go rf.electionTimer()
-	go rf.electionLoop()
+	rf.impl.lastAppliedPeerChange = 0
 	go rf.commitLoop()
 }
 
 // the application wants to create a raft peer.
 // the ports of all the raft peers (including this one)
 // are in peers[]. this server's port is peers[me].
-func Make(peers []string, me int32, rpcs *rpc.Server) *Raft {
+func Make(peers []string, me string, rpcs *rpc.Server) *Raft {
 	rf := &Raft{}
 	rf.peers = peers
 	rf.me = me
 
-	rf.initImpl()
+	rf.initImpl(me)
 
 	if rpcs != nil {
 		// caller will create socket &c
@@ -122,8 +124,8 @@ func Make(peers []string, me int32, rpcs *rpc.Server) *Raft {
 
 		// prepare to receive connections from clients.
 		// change "unix" to "tcp" to use over a network.
-		os.Remove(peers[me]) // only needed for "unix"
-		l, e := net.Listen("unix", peers[me])
+		os.Remove(me) // only needed for "unix"
+		l, e := net.Listen("unix", me)
 		if e != nil {
 			log.Fatal("listen error: ", e)
 		}
