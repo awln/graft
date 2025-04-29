@@ -93,13 +93,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	log.Println("AppendEntries received:", args, "raft idx: ", rf.me)
+	// log.Println("AppendEntries received:", args, "raft idx: ", rf.me)
 
 	reply.Success = false
 	reply.CurrentTerm = rf.impl.currentTerm
 
 	if args.Term < rf.impl.currentTerm {
-		log.Println(fmt.Sprintf("Rejecting AppendEntries. current term: %d, requested term: %d", rf.impl.currentTerm, args.Term))
+		// log.Println(fmt.Sprintf("Rejecting AppendEntries. current term: %d, requested term: %d", rf.impl.currentTerm, args.Term))
 		return nil
 	}
 
@@ -148,17 +148,16 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Success = true
 
-	log.Println("Replying to AppendEntries, reply:", reply, "log:", rf.impl.log, "peer:", rf.me)
+	// log.Println("Replying to AppendEntries, reply:", reply, "log:", rf.impl.log, "peer:", rf.me)
 
 	return nil
 }
 
 func (rf *Raft) applyLog(index int32) {
 	if val, ok := rf.impl.clientSessions[rf.impl.log[index].ClientId]; ok && rf.impl.log[index].SeqId <= val.seq {
-		log.Println("Already applied index", index, "returning")
 		return
 	}
-	log.Println("raft peer:", rf.me, "applying log:", rf.impl.log[index])
+	// log.Println("raft peer:", rf.me, "applying log:", rf.impl.log[index])
 	switch rf.impl.log[index].Operation {
 	case DELETE:
 		delete(rf.impl.clientSessions[rf.impl.log[index].ClientId].store, rf.impl.log[index].Key)
@@ -170,6 +169,11 @@ func (rf *Raft) applyLog(index int32) {
 		rf.impl.clientSessions[rf.impl.log[index].ClientId].store[rf.impl.log[index].Key] = rf.impl.clientSessions[rf.impl.log[index].ClientId].store[rf.impl.log[index].Key] + rf.impl.log[index].Value
 		rf.impl.clientSessions[rf.impl.log[index].ClientId].seq = rf.impl.log[index].SeqId
 	case REGISTERCLIENT:
+		if _, ok := rf.impl.clientSessions[rf.impl.log[index].ClientId]; ok {
+			// log.Println("Already applied index", index, "returning")
+			return
+		}
+		rf.impl.clientIndex = max(rf.impl.clientIndex, rf.impl.log[index].ClientId+1)
 		rf.impl.clientSessions[rf.impl.log[index].ClientId] = &ClientSession{-1, make(map[int]int), make(map[string]string)}
 	case REGISTERSERVER:
 		rf.impl.peers[rf.impl.log[index].Value] = struct{}{}
@@ -200,7 +204,6 @@ type RequestVoteReply struct {
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) error {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	defer log.Println("Replying to RequestVote:", reply)
 
 	reply.CurrentTerm = rf.impl.currentTerm
 	reply.VoteGranted = false
@@ -225,8 +228,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) erro
 	if args.LastLogTerm < rf.impl.lastLogTerm() {
 		return nil
 	} else if args.LastLogTerm == rf.impl.lastLogTerm() && args.LastLogIndex < rf.impl.lastLogIndex() {
-		log.Println("Rejecting RequestVote, peer:", rf.me, "Candidate Log is out of date, Candidate last log index:", args.LastLogIndex,
-			"Current last log index:", rf.impl.lastLogIndex())
+		// log.Println("Rejecting RequestVote, peer:", rf.me, "Candidate Log is out of date, Candidate last log index:", args.LastLogIndex,
+		// 	"Current last log index:", rf.impl.lastLogIndex())
 		return nil
 	}
 
@@ -258,7 +261,7 @@ func (rf *Raft) heartbeatLoop() {
 }
 
 func (rf *Raft) sendAppendEntriesToPeers() {
-	log.Println("Leader idx:", rf.me, "Leader log state:", rf.impl.log)
+	// log.Println("Leader idx:", rf.me, "Leader log state:", rf.impl.log)
 	numSuccess := 1
 	for peer := range rf.impl.peers {
 		if peer != rf.me {
@@ -295,7 +298,7 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numSuccess *int) {
 			rf.impl.commitIndex}
 		reply := AppendEntriesReply{}
 
-		log.Println("sending AppendEntries", args)
+		// log.Println("sending AppendEntries", args)
 
 		rf.mu.Unlock()
 		success := Call(peer, "Raft.AppendEntries", &args, &reply)
@@ -314,8 +317,8 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numSuccess *int) {
 		} else {
 			rf.impl.nextIndex[peer] = rf.impl.lastLogIndex()
 			rf.impl.matchIndex[peer] = rf.impl.lastLogIndex()
-			log.Println("Current nextIndexes:", rf.impl.nextIndex, "Leader Last log index:", rf.impl.lastLogIndex(),
-				"Current Commit:", rf.impl.commitIndex)
+			// log.Println("Current nextIndexes:", rf.impl.nextIndex, "Leader Last log index:", rf.impl.lastLogIndex(),
+			// 	"Current Commit:", rf.impl.commitIndex)
 			for potentialCommit := rf.impl.lastLogIndex(); potentialCommit > rf.impl.commitIndex; potentialCommit-- {
 				count := 0
 				for _, nextIndex := range rf.impl.nextIndex {
@@ -324,18 +327,18 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numSuccess *int) {
 					}
 				}
 				if count > len(rf.impl.peers)/2 {
-					log.Println("Current commit index:", rf.impl.commitIndex, "new commit index is:", potentialCommit)
+					// log.Println("Current commit index:", rf.impl.commitIndex, "new commit index is:", potentialCommit)
 					rf.impl.commitIndex = max(rf.impl.commitIndex, potentialCommit)
 					rf.impl.commitCond.Broadcast()
 					break
 				}
 			}
 			*numSuccess++
-			log.Println("Num Successes:", *numSuccess)
+			// log.Println("Num Successes:", *numSuccess)
 			if *numSuccess > len(rf.impl.peers)/2 {
 				rf.impl.lastPingTime = time.Now()
 				rf.impl.leaderCommitted = true
-				log.Println("Leader idx:", rf.me, "Broadcasting commit condition, commit index:", rf.impl.commitIndex)
+				// log.Println("Leader idx:", rf.me, "Broadcasting commit condition, commit index:", rf.impl.commitIndex)
 				rf.impl.commitCond.Broadcast()
 			}
 			return
@@ -344,7 +347,7 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numSuccess *int) {
 }
 
 func (rf *Raft) sendRequestVotes() {
-	log.Println(fmt.Sprintf("Requesting Votes for term:{%d}, idx:{%s}, state:{%d}", rf.impl.currentTerm, rf.me, rf.impl.state))
+	// log.Println(fmt.Sprintf("Requesting Votes for term:{%d}, idx:{%s}, state:{%d}", rf.impl.currentTerm, rf.me, rf.impl.state))
 	prepare := rf.impl.state == PRECANDIDATE
 	votes := 1
 	for peer := range rf.impl.peers {
@@ -364,14 +367,14 @@ func (rf *Raft) sendRequestVote(peer string, votes *int, prepare bool) {
 		rf.impl.lastLogTerm(),
 		true}
 	reply := RequestVoteReply{}
-	log.Println("Request vote to:", peer)
+	// log.Println("Request vote to:", peer)
 
 	rf.mu.Unlock()
 	success := Call(peer, "Raft.RequestVote", &args, &reply)
 	rf.mu.Lock()
 
 	if !success {
-		log.Println("Failed to Call RequestVote")
+		// log.Println("Failed to Call RequestVote")
 		return
 	}
 	if reply.CurrentTerm > rf.impl.currentTerm {
@@ -385,13 +388,13 @@ func (rf *Raft) sendRequestVote(peer string, votes *int, prepare bool) {
 		if rf.impl.state == PRECANDIDATE {
 			rf.impl.state = CANDIDATE
 			rf.impl.electionCond.Broadcast()
-			log.Println("PreElection success. Candidate is:", rf.me)
+			// log.Println("PreElection success. Candidate is:", rf.me)
 		} else if !prepare && rf.impl.state == CANDIDATE {
 			rf.convertToLeader()
 			log.Println(fmt.Sprintf("Election success. Current Leader is: %s, term: %d", rf.me, rf.impl.currentTerm))
 		}
 	} else {
-		log.Println(fmt.Sprintf("Election failure, did not receive enough votes. Received %d votes out of %d peers", *votes, len(rf.impl.peers)))
+		// log.Println(fmt.Sprintf("Election failure, did not receive enough votes. Received %d votes out of %d peers", *votes, len(rf.impl.peers)))
 	}
 }
 
@@ -403,7 +406,7 @@ func (rf *RaftImpl) convertToFollower(leaderAddress string, term int32) {
 	rf.commitCond.Broadcast()
 	rf.electionCond.Broadcast()
 	rf.readCond.Broadcast()
-	log.Println("Converting to follower")
+	// log.Println("Converting to follower")
 }
 
 func (rf *RaftImpl) lastLogIndex() int32 {
@@ -436,7 +439,7 @@ func (rf *Raft) electionTimer() {
 		minTimeout := rf.impl.electionTimeout
 		maxTimeout := 2 * rf.impl.electionTimeout
 		rf.impl.electionTimeoutDuration = rf.impl.electionTimeout + time.Duration(rand.Int63n(int64(maxTimeout-minTimeout)))
-		log.Println(fmt.Sprintf("election timeout duration: %s, peer: %s", rf.impl.electionTimeoutDuration, rf.me))
+		// log.Println(fmt.Sprintf("election timeout duration: %s, peer: %s", rf.impl.electionTimeoutDuration, rf.me))
 		time.Sleep(rf.impl.electionTimeoutDuration)
 		rf.impl.electionCond.Broadcast()
 	}
@@ -452,7 +455,7 @@ func (rf *Raft) electionLoop() {
 		} else if rf.impl.state != LEADER && time.Since(rf.impl.lastPingTime) < rf.impl.electionTimeoutDuration {
 			continue
 		}
-		log.Println(fmt.Sprintf("Time since last ping: %s, election timeout: %s, peer: %s", time.Since(rf.impl.lastPingTime), rf.impl.electionTimeout, rf.me))
+		// log.Println(fmt.Sprintf("Time since last ping: %s, election timeout: %s, peer: %s", time.Since(rf.impl.lastPingTime), rf.impl.electionTimeout, rf.me))
 		if rf.impl.state == FOLLOWER {
 			rf.impl.state = PRECANDIDATE
 			rf.impl.leaderAddress = ""
@@ -487,13 +490,13 @@ func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 	readIndex := rf.impl.commitIndex
 
 	if rf.impl.leaderAddress != rf.me {
-		log.Println("Called Get on peer:", rf.me, "leaderAddress:", rf.impl.leaderAddress)
+		// log.Println("Called Get on peer:", rf.me, "leaderAddress:", rf.impl.leaderAddress)
 		return nil
 	}
 
-	log.Println("Log after calling Get on leader:", rf.impl.log, "waiting for readIndex to be applied:", readIndex)
+	// log.Println("Log after calling Get on leader:", rf.impl.log, "waiting for readIndex to be applied:", readIndex)
 
-	for !rf.isdead() && rf.impl.state == LEADER && !rf.impl.leaderCommitted && readIndex > rf.impl.lastApplied {
+	for !rf.isdead() && rf.impl.state == LEADER && (!rf.impl.leaderCommitted || rf.impl.lastApplied < readIndex) {
 		rf.impl.commitCond.Wait()
 	}
 
@@ -540,7 +543,7 @@ func (rf *Raft) Put(args *PutArgs, reply *PutReply) error {
 	rf.impl.log = append(rf.impl.log, LogEntry{PUT, args.Key, args.Value, rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, args.ClientId, args.Seq})
 	rf.impl.nextIndex[rf.me] = rf.impl.lastLogIndex()
 	logIndex := rf.impl.lastLogIndex()
-	log.Println("Log after calling PUT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
+	// log.Println("Log after calling PUT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
 
 	for !rf.isdead() && rf.impl.state == LEADER && rf.impl.lastApplied < logIndex {
 		rf.impl.commitCond.Wait()
@@ -589,7 +592,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) error {
 	rf.impl.log = append(rf.impl.log, LogEntry{APPEND, args.Key, args.Value, rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, args.ClientId, args.Seq})
 	rf.impl.nextIndex[rf.me] = rf.impl.lastLogIndex()
 	logIndex := rf.impl.lastLogIndex()
-	log.Println("Log after calling APPEND on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
+	// log.Println("Log after calling APPEND on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
 
 	for !rf.isdead() && rf.impl.state == LEADER && rf.impl.lastApplied < logIndex {
 		rf.impl.commitCond.Wait()
@@ -616,10 +619,10 @@ func (rf *Raft) commitLoop() {
 		}
 		rf.impl.lastApplied = rf.impl.commitIndex
 		rf.impl.commitCond.Broadcast()
-		log.Println("Current state after applying logs: peer idx:", rf.me)
-		for clientId, session := range rf.impl.clientSessions {
-			log.Println("peer idx:", rf.me, "ClientId:", clientId, "session state:", *session)
-		}
+		// log.Println("Current state after applying logs: peer idx:", rf.me)
+		// for clientId, session := range rf.impl.clientSessions {
+		// 	log.Println("peer idx:", rf.me, "ClientId:", clientId, "session state:", *session)
+		// }
 	}
 }
 
@@ -651,7 +654,7 @@ func (rf *Raft) RegisterClient(args *RegisterClientArgs, reply *RegisterClientRe
 	rf.impl.nextIndex[rf.me] = rf.impl.lastLogIndex()
 	logIndex := rf.impl.lastLogIndex()
 
-	log.Println("Log after calling REGISTERCLIENT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
+	// log.Println("Log after calling REGISTERCLIENT on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
 
 	for !rf.isdead() && rf.impl.state == LEADER && rf.impl.lastApplied < logIndex {
 		rf.impl.commitCond.Wait()
@@ -666,7 +669,7 @@ func (rf *Raft) RegisterClient(args *RegisterClientArgs, reply *RegisterClientRe
 
 	reply.Success = true
 
-	log.Println("Returning from RegisterClient, with reply:", reply)
+	// log.Println("Returning from RegisterClient, with reply:", reply)
 
 	return nil
 }
@@ -692,7 +695,7 @@ func (rf *Raft) RegisterServer(args *RegisterServerArgs, reply *RegisterServerRe
 		return nil
 	}
 
-	log.Println("Catching up new peer:", args.Peer, "sending append entries")
+	// log.Println("Catching up new peer:", args.Peer, "sending append entries")
 	if args.Peer != rf.me {
 		// catch up new server
 		rf.impl.nextIndex[args.Peer] = rf.impl.lastLogIndex()
@@ -729,7 +732,7 @@ func (rf *Raft) RegisterServer(args *RegisterServerArgs, reply *RegisterServerRe
 	rf.impl.nextIndex[rf.me] = rf.impl.lastLogIndex()
 	logIndex := rf.impl.lastLogIndex()
 
-	log.Println("Log after calling REGISTERSERVER on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
+	// log.Println("Log after calling REGISTERSERVER on leader:", rf.impl.log, "waiting for logIndex to be committed:", logIndex)
 
 	for !rf.isdead() && rf.impl.state == LEADER && rf.impl.lastApplied < logIndex {
 		rf.impl.commitCond.Wait()
@@ -743,7 +746,7 @@ func (rf *Raft) RegisterServer(args *RegisterServerArgs, reply *RegisterServerRe
 
 	reply.Success = true
 
-	log.Println("Returning from RegisterServer, with reply: ", reply)
+	// log.Println("Returning from RegisterServer, with reply: ", reply)
 
 	return nil
 }

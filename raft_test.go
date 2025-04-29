@@ -251,7 +251,7 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 
 	fmt.Printf("  ... Passed\n")
 
-	fmt.Printf("Test: Sequence of puts, unreliable ...\n")
+	fmt.Printf("Test: Concurrent appends, unreliable ...\n")
 
 	for iters := 0; iters < 6; iters++ {
 		const ncli = 5
@@ -273,7 +273,7 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 				time.Sleep(100 * time.Millisecond)
 				v := client.Get(key)
 				if v != vv {
-					t.Fatalf("wrong value, key %s, got %s, expected %s", key, v, vv)
+					t.Errorf("wrong value for client %d, key %s, got %s, expected %s", client.clientId, key, v, vv)
 				}
 				ok = true
 			}(cli)
@@ -281,24 +281,14 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 		for cli := 0; cli < ncli; cli++ {
 			x := <-ca[cli]
 			if x == false {
-				t.Fatalf("failure")
+				t.Errorf("failure")
 			}
 		}
 	}
 
-	fmt.Printf("  ... Passed\n")
-
-	fmt.Printf("Test: Concurrent clients, unreliable ...\n")
-
-	var clients []*Client = make([]*Client, nservers)
-
-	for idx := range nservers {
-		clients[idx] = NewClient(rfServers, rfPorts, nservers)
-	}
+	// cleanup(rfServers)
 
 	fmt.Printf("  ... Passed\n")
-
-	fmt.Printf("Test: Concurrent Append to same key, unreliable ...\n")
 }
 
 // predict effect of Append(k, val) if old value is prev.
@@ -329,10 +319,10 @@ func checkAppends(t *testing.T, v string, counts []int) {
 }
 
 func check(t *testing.T, client *Client, key string, value string) {
-	if client.Get(key) != "value2" {
-		t.Errorf("Servers should store 'value2' for the key: 'key2'")
+	if client.Get(key) != value {
+		t.Errorf("Servers should store '%s' for the key: '%s'", value, key)
 	} else {
-		fmt.Println("Leader currently stores value2 for key2")
+		fmt.Printf("Leader currently stores %s for %s\n", value, key)
 	}
 }
 
