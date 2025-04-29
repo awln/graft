@@ -19,6 +19,8 @@ type Client struct {
 
 func NewClient(rfServers []*Raft, rfPorts []string, nraft int) *Client {
 	c := &Client{&sync.Mutex{}, rfServers, rfPorts, int64(nraft), 0, 0, "", -1}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	registerReply := &RegisterClientReply{}
 	if c.srv == "" {
 		c.srv = c.rfPorts[rand.Int63()%c.nraft]

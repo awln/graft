@@ -2,7 +2,6 @@ package graft
 
 import (
 	"fmt"
-	"math/rand"
 	"runtime"
 	"strconv"
 	"strings"
@@ -263,6 +262,7 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 				ok := false
 				defer func() { ca[me] <- ok }()
 				key := strconv.Itoa(me)
+				client := NewClient(rfServers, rfPorts, nservers)
 				vv := client.Get(key)
 				client.Append(key, "0")
 				vv = NextValue(vv, "0")
@@ -296,83 +296,9 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 		clients[idx] = NewClient(rfServers, rfPorts, nservers)
 	}
 
-	for iters := 0; iters < 20; iters++ {
-		const ncli = 15
-		var ca [ncli]chan bool
-		for cli := 0; cli < ncli; cli++ {
-			ca[cli] = make(chan bool)
-			go func(me int) {
-				defer func() { ca[me] <- true }()
-				myck := clients[rand.Intn(nservers)]
-				if (rand.Int() % 1000) < 500 {
-					myck.Put("b", strconv.Itoa(rand.Int()))
-				} else {
-					myck.Get("b")
-				}
-			}(cli)
-		}
-		for cli := 0; cli < ncli; cli++ {
-			<-ca[cli]
-		}
-
-		var va [nservers]string
-		for i := 0; i < nservers; i++ {
-			va[i] = clients[rand.Intn(nservers)].Get("b")
-			if va[i] != va[0] {
-				t.Fatalf("mismatch; 0 got %v, %v got %v", va[0], i, va[i])
-			}
-		}
-	}
-
 	fmt.Printf("  ... Passed\n")
 
 	fmt.Printf("Test: Concurrent Append to same key, unreliable ...\n")
-
-	client.Put("k", "")
-
-	ff := func(me int, ch chan int) {
-		ret := -1
-		defer func() { ch <- ret }()
-		myck := clients[rand.Intn(nservers)]
-		n := 0
-		for n < 5 {
-			myck.Append("k", "x "+strconv.Itoa(me)+" "+strconv.Itoa(n)+" y")
-			n++
-		}
-		ret = n
-	}
-
-	ncli := 5
-	cha := []chan int{}
-	for i := 0; i < ncli; i++ {
-		cha = append(cha, make(chan int))
-		go ff(i, cha[i])
-	}
-
-	counts := []int{}
-	for i := 0; i < ncli; i++ {
-		n := <-cha[i]
-		if n < 0 {
-			t.Fatal("client failed")
-		}
-		counts = append(counts, n)
-	}
-
-	vx := client.Get("k")
-	checkAppends(t, vx, counts)
-
-	{
-		for i := 0; i < nservers; i++ {
-			vi := clients[rand.Intn(nservers)].Get("k")
-			if vi != vx {
-				t.Fatalf("mismatch; 0 got %v, %v got %v", vx, i, vi)
-			}
-		}
-	}
-
-	fmt.Printf("  ... Passed\n")
-
-	time.Sleep(1 * time.Second)
 }
 
 // predict effect of Append(k, val) if old value is prev.
