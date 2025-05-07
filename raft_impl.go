@@ -212,11 +212,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) erro
 		return nil
 	}
 
-	if !args.Prepare && args.Term > rf.impl.currentTerm {
-		rf.impl.convertToFollower(args.CandidateAddress, args.Term)
-		reply.CurrentTerm = rf.impl.currentTerm
-	}
-
 	// already voted
 	if !args.Prepare && rf.impl.votedFor != "" && rf.impl.votedFor != args.CandidateAddress {
 		return nil
@@ -289,6 +284,8 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numSuccess *int) {
 			return
 		}
 
+		lastIndexSent := rf.impl.lastLogIndex()
+
 		args := AppendEntriesArgs{
 			rf.impl.currentTerm,
 			rf.me,
@@ -315,8 +312,8 @@ func (rf *Raft) sendAppendEntriesToPeer(peer string, numSuccess *int) {
 			}
 			rf.impl.nextIndex[peer]--
 		} else {
-			rf.impl.nextIndex[peer] = rf.impl.lastLogIndex()
-			rf.impl.matchIndex[peer] = rf.impl.lastLogIndex()
+			rf.impl.nextIndex[peer] = max(rf.impl.nextIndex[peer], lastIndexSent)
+			rf.impl.matchIndex[peer] = max(rf.impl.nextIndex[peer], lastIndexSent)
 			// log.Println("Current nextIndexes:", rf.impl.nextIndex, "Leader Last log index:", rf.impl.lastLogIndex(),
 			// 	"Current Commit:", rf.impl.commitIndex)
 			for potentialCommit := rf.impl.lastLogIndex(); potentialCommit > rf.impl.commitIndex; potentialCommit-- {
@@ -365,7 +362,7 @@ func (rf *Raft) sendRequestVote(peer string, votes *int, prepare bool) {
 		rf.me,
 		rf.impl.lastLogIndex(),
 		rf.impl.lastLogTerm(),
-		true}
+		prepare}
 	reply := RequestVoteReply{}
 	// log.Println("Request vote to:", peer)
 
@@ -387,6 +384,8 @@ func (rf *Raft) sendRequestVote(peer string, votes *int, prepare bool) {
 	if *votes > len(rf.impl.peers)/2 {
 		if rf.impl.state == PRECANDIDATE {
 			rf.impl.state = CANDIDATE
+			rf.impl.currentTerm++
+			rf.impl.votedFor = rf.me
 			rf.impl.electionCond.Broadcast()
 			// log.Println("PreElection success. Candidate is:", rf.me)
 		} else if !prepare && rf.impl.state == CANDIDATE {
@@ -403,6 +402,7 @@ func (rf *RaftImpl) convertToFollower(leaderAddress string, term int32) {
 	rf.currentTerm = term
 	rf.leaderAddress = leaderAddress
 	rf.leaderCommitted = false
+	rf.votedFor = ""
 	rf.commitCond.Broadcast()
 	rf.electionCond.Broadcast()
 	rf.readCond.Broadcast()
@@ -422,6 +422,10 @@ func (rf *Raft) convertToLeader() {
 	rf.impl.state = LEADER
 	rf.impl.leaderAddress = rf.me
 	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "NOOP", "NOOP", rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, 0, 0})
+	// log.Println("Leader idx:", rf.me, "Leader log state:", rf.impl.log)
+	// for clientId, session := range rf.impl.clientSessions {
+	// 	log.Println("peer idx:", rf.me, "ClientId:", clientId, "session state:", *session)
+	// }
 	rf.impl.matchIndex = make(map[string]int32, len(rf.impl.peers))
 	for peer := range rf.impl.matchIndex {
 		rf.impl.matchIndex[peer] = 0
@@ -460,9 +464,6 @@ func (rf *Raft) electionLoop() {
 			rf.impl.state = PRECANDIDATE
 			rf.impl.leaderAddress = ""
 			rf.impl.votedFor = ""
-		} else if rf.impl.state == CANDIDATE {
-			rf.impl.currentTerm++
-			rf.impl.votedFor = rf.me
 		}
 		rf.sendRequestVotes()
 	}
@@ -487,9 +488,9 @@ func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 	reply.Success = false
 	reply.LeaderHint = rf.impl.leaderAddress
 
-	readIndex := rf.impl.commitIndex
+	readIndex := rf.impl.lastLogIndex() // todo: set this as the noop entry the leader committed
 
-	if rf.impl.leaderAddress != rf.me {
+	if rf.impl.state != LEADER {
 		// log.Println("Called Get on peer:", rf.me, "leaderAddress:", rf.impl.leaderAddress)
 		return nil
 	}
@@ -529,7 +530,7 @@ func (rf *Raft) Put(args *PutArgs, reply *PutReply) error {
 	reply.Success = false
 	reply.LeaderHint = rf.impl.leaderAddress
 
-	if rf.impl.leaderAddress != rf.me {
+	if rf.impl.state != LEADER {
 		return nil
 	}
 
@@ -578,7 +579,7 @@ func (rf *Raft) Append(args *AppendArgs, reply *AppendReply) error {
 	reply.Success = false
 	reply.LeaderHint = rf.impl.leaderAddress
 
-	if rf.impl.leaderAddress != rf.me {
+	if rf.impl.state != LEADER {
 		return nil
 	}
 
@@ -700,11 +701,13 @@ func (rf *Raft) RegisterServer(args *RegisterServerArgs, reply *RegisterServerRe
 		// catch up new server
 		rf.impl.nextIndex[args.Peer] = rf.impl.lastLogIndex()
 		rf.impl.matchIndex[args.Peer] = 0
-		for lastSendAppliedEntries := time.Now(); rf.impl.state == LEADER && time.Since(lastSendAppliedEntries) > rf.impl.electionTimeout; lastSendAppliedEntries = time.Now() {
-			success := 0
+		prevSuccess := 1
+		for lastSendAppliedEntries := time.Now(); rf.impl.state == LEADER && (prevSuccess == 0 || (prevSuccess == 1 && time.Since(lastSendAppliedEntries) > rf.impl.electionTimeout)); lastSendAppliedEntries = time.Now() {
 			rf.mu.Unlock()
+			success := 0
 			rf.sendAppendEntriesToPeer(args.Peer, &success)
 			rf.mu.Lock()
+			prevSuccess = success
 		}
 	}
 

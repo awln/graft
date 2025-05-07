@@ -230,6 +230,7 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 	}
 	for i := 0; i < nservers; i++ {
 		rfServers[i] = Make(rfPorts, rfPorts[i], nil)
+		rfServers[i].impl.electionTimeout = time.Millisecond * 60
 		rfServers[i].setunreliable(true)
 	}
 	rfServers[0].convertToLeader()
