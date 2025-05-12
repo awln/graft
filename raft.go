@@ -102,6 +102,7 @@ func (rf *Raft) initImpl(me string) {
 	rf.impl.peers[me] = struct{}{}
 	rf.impl.clientIndex = 0
 	rf.impl.lastAppliedPeerChange = 0
+	rf.impl.snapshotService = newBoltSnapshotService(me+"-log", me+"-metadata")
 	go rf.commitLoop()
 }
 

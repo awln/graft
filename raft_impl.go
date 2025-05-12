@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// TODO: log compaction, log persistence,
+
 type RaftImpl struct {
 	state State
 
@@ -16,6 +18,10 @@ type RaftImpl struct {
 	commitIndex           int32
 	lastApplied           int32
 	lastAppliedPeerChange int32
+	lastIncluded          int32
+
+	snapshotService SnapshotService
+	previousPeers   map[string]struct{}
 
 	clientSessions map[int]*ClientSession
 	clientIndex    int
@@ -26,6 +32,7 @@ type RaftImpl struct {
 	nextIndex       map[string]int32 // volatile state: only for leader to use, reset on leader election
 	matchIndex      map[string]int32 // volatile state: only for leader to use, reset on leader election
 	leaderCommitted bool
+	leaderEntry     int32
 
 	electionCond            *sync.Cond
 	commitCond              *sync.Cond
@@ -410,7 +417,7 @@ func (rf *RaftImpl) convertToFollower(leaderAddress string, term int32) {
 }
 
 func (rf *RaftImpl) lastLogIndex() int32 {
-	return int32(len(rf.log) - 1)
+	return rf.log[int32(len(rf.log)-1)].Index
 }
 
 func (rf *RaftImpl) lastLogTerm() int32 {
@@ -422,6 +429,7 @@ func (rf *Raft) convertToLeader() {
 	rf.impl.state = LEADER
 	rf.impl.leaderAddress = rf.me
 	rf.impl.log = append(rf.impl.log, LogEntry{NOOP, "NOOP", "NOOP", rf.impl.currentTerm, rf.impl.lastLogIndex() + 1, 0, 0})
+	rf.impl.leaderEntry = rf.impl.lastLogIndex()
 	// log.Println("Leader idx:", rf.me, "Leader log state:", rf.impl.log)
 	// for clientId, session := range rf.impl.clientSessions {
 	// 	log.Println("peer idx:", rf.me, "ClientId:", clientId, "session state:", *session)
@@ -488,16 +496,14 @@ func (rf *Raft) Get(args *GetArgs, reply *GetReply) error {
 	reply.Success = false
 	reply.LeaderHint = rf.impl.leaderAddress
 
-	readIndex := rf.impl.lastLogIndex() // todo: set this as the noop entry the leader committed
-
 	if rf.impl.state != LEADER {
 		// log.Println("Called Get on peer:", rf.me, "leaderAddress:", rf.impl.leaderAddress)
 		return nil
 	}
 
-	// log.Println("Log after calling Get on leader:", rf.impl.log, "waiting for readIndex to be applied:", readIndex)
+	log.Println("Log after calling Get on leader:", rf.impl.log, "waiting for readIndex to be applied:", rf.impl.leaderEntry)
 
-	for !rf.isdead() && rf.impl.state == LEADER && (!rf.impl.leaderCommitted || rf.impl.lastApplied < readIndex) {
+	for !rf.isdead() && rf.impl.state == LEADER && (!rf.impl.leaderCommitted || rf.impl.lastApplied < rf.impl.leaderEntry) {
 		rf.impl.commitCond.Wait()
 	}
 
@@ -616,15 +622,30 @@ func (rf *Raft) commitLoop() {
 	for !rf.isdead() {
 		rf.impl.commitCond.Wait()
 		for index := rf.impl.lastApplied; index <= rf.impl.commitIndex; index++ {
-			rf.applyLog(index)
+			rf.applyLog(index) // adjusted index
 		}
 		rf.impl.lastApplied = rf.impl.commitIndex
+
+		rf.sendSnapshotToStorage()
+
 		rf.impl.commitCond.Broadcast()
 		// log.Println("Current state after applying logs: peer idx:", rf.me)
 		// for clientId, session := range rf.impl.clientSessions {
 		// 	log.Println("peer idx:", rf.me, "ClientId:", clientId, "session state:", *session)
 		// }
 	}
+}
+
+func (rf *Raft) sendSnapshotToStorage() {
+	// create snapshot from start of log to commit index
+	appliedIndex := rf.impl.lastApplied - rf.impl.log[0].Index
+	appliedLog := rf.impl.log[appliedIndex]
+	snapshot := &Snapshot{appliedLog.Index, appliedLog.Term, rf.impl.log[:appliedIndex]}
+	// call snapshot service using this snapshot
+	rf.impl.snapshotService.writeSnapshotToDisk(snapshot)
+	// retain commit index - 1's log entry, and retain the last log configuration in the snapshotted log
+	// rf.impl.log = rf.impl.log[appliedIndex:]
+	rf.impl.lastIncluded = appliedIndex
 }
 
 type RegisterClientArgs struct {
@@ -645,6 +666,10 @@ func (rf *Raft) RegisterClient(args *RegisterClientArgs, reply *RegisterClientRe
 
 	if rf.impl.leaderAddress != rf.me {
 		return nil
+	}
+
+	for !rf.isdead() && rf.impl.state == LEADER && (!rf.impl.leaderCommitted || rf.impl.lastApplied < rf.impl.leaderEntry) {
+		rf.impl.commitCond.Wait()
 	}
 
 	reply.ClientId = rf.impl.clientIndex

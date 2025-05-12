@@ -255,7 +255,7 @@ func TestConcurrentLongUnreliable(t *testing.T) {
 	fmt.Printf("Test: Concurrent appends, unreliable ...\n")
 
 	for iters := 0; iters < 6; iters++ {
-		const ncli = 5
+		const ncli = 30
 		var ca [ncli]chan bool
 		for cli := 0; cli < ncli; cli++ {
 			ca[cli] = make(chan bool)
